@@ -12,6 +12,5 @@ wheels/
 outputs/
 catboost_info/
 model_weights/
-requirements.txt
-
-README.md
+demo_predict.py
+TEST_RESULTS/

@@ -3,20 +3,25 @@ import warnings
 import argparse
 from pathlib import Path
 
+from time import perf_counter as p
+ 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
+ 
+# Добавляем корень проекта в sys.path, чтобы импорты src.* работали
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, "src")
+ 
 from src import config
+from src.init_data import load_data
 from src.features import build_feature_matrix
-from src.data_split import split_data_ts
+from src.data_split import get_walk_forward_indices
 from src.models import (
     get_models,
     compute_traffic_metrics,
-    compute_business_metrics
+    compute_business_metrics,
 )
-from src.model_cache import save_model, load_model
+from src.model_cache import save_model
 from src.plots import (
     plot_distribution,
     plot_forecast_vs_actual,
@@ -28,118 +33,168 @@ from src.plots import (
     plot_roi_vs_traffic,
     plot_saturation_curve,
     plot_shap_importance,
+    plot_naive_comparison,
+    plot_economic_interpretation,
 )
-
-
+ 
 warnings.filterwarnings("ignore")
 
 
-def load_data(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    required = {
-        "event_hour", "source", "medium",
-        "device_type", "os",
-        "users", "page_views", "conversions", "revenue"
-    }
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Отсутствуют колонки: {missing}")
-    df["event_hour"] = pd.to_datetime(df["event_hour"], utc=True, errors="coerce")
-    df = df.dropna(subset=["event_hour"])
-    numeric_cols = ["users", "page_views", "conversions", "revenue"]
-    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-    df = df.sort_values("event_hour").reset_index(drop=True)
-    print(f"[data] Загружено строк: {len(df):,}")
-    return df
+def _fit_model(
+    name: str,
+    model, 
+    X_train,
+    y_train, 
+    X_val, 
+    y_val
+) -> None:
+    if name == "LightGBM":
+        import lightgbm as lgb
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            callbacks=[
+                lgb.early_stopping(50, verbose=False),
+                lgb.log_evaluation(-1),
+            ],
+        )
+    elif name == "CatBoost":
+        model.fit(
+            X_train, y_train,
+            eval_set=(X_val, y_val),
+            early_stopping_rounds=50,
+            verbose=False,
+        )
+    elif name == "XGBoost":
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            verbose=False,
+        )
+    else:
+        model.fit(X_train, y_train)
 
 
-def run_sensitivity_analysis(df: pd.DataFrame):
-    """Запуск обучения и оценки моделей для разных сегментов CPC."""
-    all_results = []
-    train_df, test_df = split_data_ts(df)
+def run_sensitivity_analysis(
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    
+    all_results: list[dict] = []
+    folds = get_walk_forward_indices(df, n_splits=config.N_SPLITS)
+
     for cpc in config.CPC_SEGMENTS:
-        print(f"\n" + "═"*50)
-        print(f" АНАЛИЗ ДЛЯ CPC = ${cpc:.2f}")
-        print("═"*50)
-        X_train, y_train, encoders = build_feature_matrix(train_df, cpc)
-        X_test, y_test, _ = build_feature_matrix(test_df, cpc, encoders=encoders)
-        models_dict = get_models()
-        train_conv_rate = train_df["conversions"].sum() / train_df["users"].sum()
-        for name, model in models_dict.items():
-            print(f"[model] Обработка {name}...")
-            if name == "XGBoost":
-                model.fit(X_train, y_train)
-            elif name == "LightGBM":
-                import lightgbm as lgb
-                model.fit(
-                    X_train, y_train,
-                    eval_set=[(X_test, y_test)],
-                    eval_metric="l2",
-                    callbacks=[lgb.early_stopping(50)]
+        print(f"\n{'='*50}\n CPC = ${cpc}\n{'='*50}")
+
+        for name in get_models():
+            print(f"[{name}] walk-forward обучение...")
+
+            all_t_metrics: list[dict] = []
+            all_b_metrics: list[dict] = []
+            fold_smapes: list[dict] = []
+            naive_smapes: list[dict] = []
+
+            for i, (train_fold, test_fold) in enumerate(folds):
+                start = p()
+
+                X_train, y_train, encoders, seg_stats, _ = build_feature_matrix(
+                    train_fold, cpc
                 )
-            elif name == "CatBoost":
-                model.fit(
-                    X_train, y_train,
-                    eval_set=(X_test, y_test),
-                    early_stopping_rounds=50,
-                    verbose=False
+                X_test, y_test, _, _, is_paid_mask = build_feature_matrix(
+                    test_fold, cpc, encoders=encoders, seg_stats=seg_stats
                 )
-            else:
-                model.fit(X_train, y_train)
-            save_model(model, name, cpc)
-            preds = model.predict(X_test)
-            preds = np.maximum(preds, 0)
-            t_metrics = compute_traffic_metrics(y_test, preds)
-            is_paid_mask = test_df["medium"].str.lower().str.contains("cpc|paid|ppc", na=False).values
-            b_metrics = compute_business_metrics(
-                y_true=y_test.values,
-                y_pred=preds,
-                conversions=test_df["conversions"].values,
-                revenue=test_df["revenue"].values,
-                cpc=cpc,
-                users=test_df["users"].values,
-                is_paid_mask=is_paid_mask,
-                conv_rate=train_conv_rate
-            )
-            res_row = {
-                "CPC ($)": cpc,
-                "Model": name,
-                **t_metrics,
-                **b_metrics
-            }
-            all_results.append(res_row)
-            if cpc == 0.30:
-                plot_forecast_vs_actual(y_test, preds, title=f"{name} CPC 0.30")
-            if cpc == 0.30 and name == "LightGBM":
-                plot_shap_importance(model, X_test)
-                plot_residuals(y_test, preds)
-                plot_distribution(y_test, preds)
-                plot_learning_curve(model, X_train, y_train, title="LightGBM")
-                plot_roi_vs_traffic(preds, test_df, cpc, train_conv_rate)
+
+                train_conv_rate = train_fold["conversions"].sum() / max(train_fold["users"].sum(), 1)
+
+                y_naive = y_test.shift(1).bfill()
+                naive_smapes.append(
+                    compute_traffic_metrics(y_test, y_naive)["sMAPE (%)"]
+                )
+
+                model = get_models()[name]
+                _fit_model(name, model, X_train, y_train, X_test, y_test)
+                save_model(model, f"{name}_fold-{i+1}", cpc)
+
+                preds = np.maximum(model.predict(X_test), 0)
+
+                t_m = compute_traffic_metrics(y_test, preds)
+                b_m = compute_business_metrics(
+                    y_true=y_test.values, 
+                    y_pred=preds,
+                    conversions=test_fold["conversions"].values,
+                    revenue=test_fold["revenue"].values,
+                    cpc=cpc, 
+                    users=test_fold["users"].values,
+                    is_paid_mask=is_paid_mask,
+                    conv_rate=train_conv_rate,
+                )
+                all_t_metrics.append(t_m)
+                all_b_metrics.append(b_m)
+                fold_smapes.append(t_m["sMAPE (%)"])
+                m = compute_traffic_metrics(y_test, preds)
+                print(f"[{name}]\n[Fold] {i+1} sMAPE: {m['sMAPE (%)']}%")
+                print(f"[Fold] {i+1} R²={t_m['R²']:.4f}")
+                print(f"[Fold] {i+1} MAE={t_m['MAE']:.2f}")
+
+                is_last_fold = (i == len(folds) - 1)
+
+                if cpc == 0.30 and is_last_fold:
+                    plot_forecast_vs_actual(y_test, preds, title=f"{name}_fold_{i+1}_CPC_0.30")
+                    if name == "LightGBM":
+                        plot_shap_importance(model, X_test)
+                        plot_residuals(y_test, preds, title=f"residuals_{name}_fold_{i+1}_CPC_0.30")
+                        plot_distribution(y_test, preds, title=f"distribution_{name}_fold_{i+1}_CPC_0.30")
+                        plot_learning_curve(model, X_train, y_train, title=f"{name}_fold_{i+1}_CPC_0.30")
+                        plot_roi_vs_traffic(preds, test_fold, cpc, train_conv_rate, title=f"roi_vs_traffic_{name}_fold_{i+1}_CPC_0.30")
+                
+                print(f"[time] {p() - start: .2f}")
+
+            avg_smape = float(np.mean(fold_smapes))
+            avg_naive_smape = float(np.mean(naive_smapes))
+
+            if avg_smape >= avg_naive_smape * 0.9:
+                print(f"\n{'='*50}\n ПРЕДУПРЕЖДЕНИЕ: Модель {name} почти не лучше наивной!\n{'='*50}"
+                      f"({avg_smape:.2f}%(fold) vs {avg_naive_smape:.2f}%(naive))\n")
+            avg_t = pd.DataFrame(all_t_metrics).mean().to_dict()
+            avg_b = pd.DataFrame(all_b_metrics).mean().to_dict()
+            all_results.append({
+                "CPC ($)": cpc, 
+                "Model": name, 
+                "sMAPE (%)": avg_smape,
+                "Naive sMAPE (%)": avg_naive_smape,
+                **avg_t,
+                **avg_b,
+            })
+
     return pd.DataFrame(all_results)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GA4 Traffic Forecasting Tool")
-    parser.add_argument("--data", type=str, default=str(config.DATA_PATH), help="Путь к CSV")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", default=str(config.DATA_PATH))
     args = parser.parse_args()
-    config.OUTPUT_DIR.mkdir(exist_ok=True)
-    try:
-        df = load_data(args.data)
-        results_df = run_sensitivity_analysis(df)
-        plot_incrementality(df)
-        plot_saturation_curve(results_df)
-        print("\n" + "─"*72)
-        print(" ФИНАЛЬНЫЕ РЕЗУЛЬТАТЫ (SENSITIVITY ANALYSIS)")
-        print("─"*72)
-        print(results_df.sort_values(["CPC ($)", "sMAPE (%)"]).to_string(index=False))
-        results_df.to_csv(config.OUTPUT_DIR / "final_results.csv", index=False)
-        plot_metrics_comparison(results_df)
-        plot_roi_sensitivity(results_df)
-        print(f"\n[success] Все отчеты и графики сохранены в {config.OUTPUT_DIR}")
-    except Exception as e:
-        print(f"[error] Критическая ошибка: {e}")
-        sys.exit(1)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    df = load_data(args.data)
+    incr_df = plot_incrementality(df)
+    paid_share = (
+        incr_df["paid"].sum() /
+        (incr_df["paid"].sum() + incr_df["organic"].sum()) * 100
+    )
+    print(f"[main] Доля платного трафика: {paid_share:.1f}%")
+
+    results = run_sensitivity_analysis(df)
+
+    plot_saturation_curve(results)
+    plot_metrics_comparison(results)
+    plot_roi_sensitivity(results)
+    plot_economic_interpretation(results)
+    plot_naive_comparison(results)
+    plot_incrementality(df)
+
+    print("\n" + "─"*72)
+    print(results.sort_values(["CPC ($)", "sMAPE (%)"]).to_string(index=False))
+    results.to_csv(config.OUTPUT_DIR / "final_results.csv", index=False)
+    print(f"\n[success] Готово. Результаты в {config.OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

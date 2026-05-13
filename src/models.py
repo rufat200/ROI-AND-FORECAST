@@ -1,11 +1,10 @@
 import numpy as np
-
+import pandas as pd
 
 from xgboost import XGBRegressor
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
 from sklearn.ensemble import RandomForestRegressor
-
 
 from sklearn.metrics import (
         mean_absolute_error,
@@ -13,19 +12,35 @@ from sklearn.metrics import (
         r2_score,
         median_absolute_error
     )
+
 import config
 
 
-def get_models():
-    """Возвращает словарь с «чистыми» моделями."""
+def get_models() -> dict:
+    xgb_p = dict(**config.XGB_PARAMS)
+    cat_p = dict(**config.CATBOOST_PARAMS)
+    lgb_p = dict(**config.LGBM_PARAMS)
+
+    if config.USE_GPU:
+        xgb_p["device"] = "cuda"
+
+        lgb_p["device_type"] = "gpu"
+
+        cat_p["task_type"] = "GPU"
+        cat_p["devices"] = "0"
+
     return {
-        "XGBoost"     : XGBRegressor(**config.XGB_PARAMS),
-        "CatBoost"    : CatBoostRegressor(**config.CATBOOST_PARAMS),
-        "LightGBM"    : LGBMRegressor(**config.LGBM_PARAMS),
-        "RandomForest": RandomForestRegressor(**config.RF_PARAMS)
+        "XGBoost"     : XGBRegressor(**xgb_p),
+        "CatBoost"    : CatBoostRegressor(**cat_p),
+        "LightGBM"    : LGBMRegressor(**lgb_p),
+        # "RandomForest": RandomForestRegressor(**config.RF_PARAMS)
     }
 
-def compute_traffic_metrics(y_true, y_pred):
+
+def compute_traffic_metrics(
+    y_true: np.ndarray | pd.Series, 
+    y_pred: np.ndarray | pd.Series,
+) -> dict:
     """
     Метрики
     -------
@@ -35,22 +50,22 @@ def compute_traffic_metrics(y_true, y_pred):
     MSE   : Mean Squared Error
     RMSE  : Root Mean Squared Error
     MedAE : Median Absolute Error
-    Bias  : Mean signed error  (pred – true)
+    Bias  : Mean signed error  (pred – true) # Среднее смещение
     MASE  : Mean Absolute Scaled Error  (naive baseline = lag-1)
     """
 
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
 
-    denom = (np.abs(y_true) + np.abs(y_pred)) / 2
-    smape = np.mean(np.where(denom == 0, 0, np.abs(y_true - y_pred) / denom)) * 100
-    
+    if len(y_true) == 0:
+        return {k: np.nan for k in
+                ["sMAPE (%)", "MAE", "R²", "MSE", "RMSE", "MedAE", "Bias", "MASE"]}
 
-    if len(y_true) < 2:
-        mase = np.nan
-    else:
-        naive_mae = mean_absolute_error(y_true[1:], y_true[:-1]) or 1e-9
-        mase = mean_absolute_error(y_true, y_pred) / naive_mae
+    denom = (np.abs(y_true) + np.abs(y_pred)) / 2
+    smape = np.mean(np.where(denom == 0, 0.0, np.abs(y_true - y_pred) / denom)) * 100
+    
+    naive_mae = mean_absolute_error(y_true[1:], y_true[:-1]) if len(y_true) > 1 else 1e-9
+    mase = mean_absolute_error(y_true, y_pred) / max(naive_mae, 1e-9)
 
     mae = mean_absolute_error(y_true, y_pred)
     rmse = root_mean_squared_error(y_true, y_pred)
@@ -70,41 +85,61 @@ def compute_traffic_metrics(y_true, y_pred):
         "MASE"     : round(mase,  4),
     }
 
-def compute_business_metrics(
-    y_true, y_pred,
-    conversions, revenue,
-    cpc, users,
-    is_paid_mask,
-    conv_rate
-):
-    total_users = float(np.sum(users)) or 1e-9
-    total_conv = conversions.sum()
-    total_rev = revenue.sum()
 
-    ad_spend = cpc * users[is_paid_mask].sum()
+def compute_business_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    conversions: np.ndarray,
+    revenue: np.ndarray,
+    cpc: float,
+    users: np.ndarray,
+    is_paid_mask: np.ndarray,
+    conv_rate: float,
+) -> dict:
+    
+    total_users = float(np.sum(users)) or 1e-9
+    total_conv = float(np.sum(conversions))
+    total_rev = float(np.sum(revenue))
+    paid_users = float(np.sum(users[is_paid_mask]))
+
+    ad_spend = cpc * paid_users
+
     pred_conversions = y_pred * conv_rate
     pred_revenue = pred_conversions * config.AVG_ORDER_VALUE
 
-    roi = ((pred_revenue.sum() - ad_spend) / ad_spend * 100) if ad_spend > 0 else 0
-    roas = (total_rev / ad_spend) if ad_spend > 0 else 0
-    cpa = (ad_spend / total_conv) if total_conv > 0 else 0
+    paid_pred = float(np.sum(y_pred[is_paid_mask]))
+    organic_pred = float(np.sum(y_pred[~is_paid_mask]))
+    delta_users = paid_pred - organic_pred
+
+    delta_cost = ad_spend if ad_spend > 0 else 1e-9
+    elasticity = delta_users / delta_cost
+
+    roi = ((pred_revenue.sum() - ad_spend) / ad_spend * 100) if ad_spend > 0 else 0.0
+    roas = (total_rev / ad_spend) if ad_spend > 0 else 0.0
+    cpa = (ad_spend / total_conv) if total_conv > 0 else 0.0
 
     churn = config.MONTHLY_CHURN_RATE
-    ltv = config.AVG_ORDER_VALUE * (1 / churn) * config.GROSS_MARGIN
+    ltv = config.AVG_ORDER_VALUE * (1.0 / churn) * config.GROSS_MARGIN
     retention = (1 - churn) * 100
     cr = total_conv / total_users * 100
     ctr = config.CTR_DEFAULT * 100
 
+    pred_total_users = float(np.sum(y_pred)) or 1e-9
+    predicted_cr = pred_conversions.sum() / pred_total_users * 100
+
     return {
-        "Ad Spend ($)": round(ad_spend, 2),
-        "Revenue ($)": round(total_rev, 2),
-        "ROI (%)": round(roi, 2),
-        "ROAS": round(roas, 4),
-        "CPA ($)": round(cpa, 4),
-        "CAC ($)": round(cpa, 4),
-        "LTV/CLV ($)": round(ltv, 2),
-        "Churn Rate (%)": round(churn * 100, 2),
-        "Retention (%)": round(retention, 2),
-        "CR (%)": round(cr, 4),
-        "CTR (%)": round(ctr, 2),
+        "Elasticity"       : round(elasticity,         4),
+        "Ad Spend ($)"     : round(ad_spend,           2),
+        "Revenue ($)"      : round(total_rev,          2),
+        "Pred Revenue ($)" : round(pred_revenue.sum(), 2),
+        "ROI (%)"          : round(roi,                2),
+        "ROAS"             : round(roas,               4),
+        "CPA ($)"          : round(cpa,                4),
+        "CAC ($)"          : round(cpa,                4),
+        "LTV/CLV ($)"      : round(ltv,                2),
+        "Churn Rate (%)"   : round(churn * 100,        2),
+        "Retention (%)"    : round(retention,          2),
+        "CR (%)"           : round(cr,                 4),
+        "Pred CR (%)"      : round(predicted_cr,       4),
+        "CTR (%)"          : round(ctr,                2),
     }
