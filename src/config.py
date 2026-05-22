@@ -31,9 +31,9 @@ USE_GPU = True
 
 
 LGBM_PARAMS = dict(
-    n_estimators=4000,
-    learning_rate=0.01,
-    num_leaves=100,
+    n_estimators=300,
+    learning_rate=0.07,
+    num_leaves=63,
     max_depth=-1,
     min_child_samples=20,
     subsample=0.8,
@@ -45,9 +45,9 @@ LGBM_PARAMS = dict(
 
 
 XGB_PARAMS = dict(
-    n_estimators=4000,
-    learning_rate=0.01,
-    max_depth=10,
+    n_estimators=300,
+    learning_rate=0.07,
+    max_depth=6,
     subsample=0.8,
     colsample_bytree=0.8,
     random_state=42,
@@ -57,19 +57,18 @@ XGB_PARAMS = dict(
 )
 
 CATBOOST_PARAMS = dict(
-    iterations=4000,
-    learning_rate=0.01,
-    depth=10,
+    iterations=300,
+    learning_rate=0.07,
+    depth=6,
     random_seed=42,
     verbose=0,
 )
 
 
-# RF_PARAMS = dict(
-#     n_estimators=1500,
-#     max_depth=10,
-#     min_samples_split=5,
-#     random_state=42,
-#     n_jobs=-1,
-    
-# )
+RF_PARAMS = dict(
+    n_estimators=300,
+    max_depth=6,
+    min_samples_split=5,
+    random_state=42,
+    n_jobs=-1,
+)

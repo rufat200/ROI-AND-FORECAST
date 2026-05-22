@@ -12,7 +12,7 @@ import config
 
 plt.style.use("ggplot")
 sns.set_theme(style="whitegrid")
-COLORS = ["#2196F3", "#FF9800", "#4CAF50", "#E91E63"]
+COLORS = ["#0000FF", "#FFFF00", "#008000", "#FF006E"]
 
 
 # ── Вспомогательная: сохранение фигуры ───────────────────────────────────────
@@ -35,11 +35,17 @@ def plot_economic_interpretation(
     results_df: pd.DataFrame, 
     output_dir: str | Path = "outputs",
 ) -> None:
+    rev_col = "Pred Revenue ($)" if "Pred Revenue ($)" in results_df.columns else "Revenue ($)"
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    sns.lineplot(data=results_df, x="CPC ($)", y="Revenue ($)", hue="Model", ax=axes[0], marker="o")
-    axes[0].set_title("Эффективность затрат (CPC vs Revenue)")
-    sns.lineplot(data=results_df, x="CPC ($)", y="ROI (%)", hue="Model", ax=axes[1], marker="o")
+    sns.lineplot(data=results_df, x="CPC ($)", y=rev_col, hue="Model", ax=axes[0], marker="o", palette=COLORS)
+    axes[0].set_title("Предсказанная выручка от платного трафика (CPC vs Pred Revenue)")
+    axes[0].set_ylabel("Pred Revenue ($)")
+
+    sns.lineplot(data=results_df, x="CPC ($)", y="ROI (%)", hue="Model", ax=axes[1], marker="o", palette=COLORS)
     axes[1].set_title("Экономическая интерпретация (CPC vs ROI)")
+    axes[1].axhline(0, linestyle="--", color="black", linewidth=0.8, label="Break-even")
+    axes[1].legend()
     plt.tight_layout()
     _save(fig, "economic_interpretation.png", output_dir)
 
@@ -165,8 +171,15 @@ def plot_shap_importance(
 
         shap.plots.bar(shap_values, max_display=max_display, show=False)
         fig = plt.gcf()
-        fig.set_size_inches(10, 6)
-        _save(fig, "shap_importance.png", output_dir)
+        fig.set_size_inches(10, 7)
+        plt.title("SHAP Feature Importance (mean |SHAP|)")
+        _save(fig, "shap_importance_bar.png", output_dir)
+
+        shap.plots.beeswarm(shap_values, max_display=max_display, show=False)
+        fig = plt.gcf()
+        fig.set_size_inches(11, 7)
+        plt.title("SHAP Beeswarm: направление влияния признаков")
+        _save(fig, "shap_importance_beeswarm.png", output_dir)
     except Exception as e:
         print(f"[SHAP] ошибка: {e}")
 
@@ -218,26 +231,35 @@ def plot_roi_vs_traffic(
     df: pd.DataFrame, 
     cpc: float, 
     conv_rate: float, 
+    is_paid_mask: np.ndarray,
     title: str = "roi_vs_traffic",
     output_dir: str | Path = "outputs",
 ) -> None:
     n = len(y_pred)
     if len(df) < n:
         raise ValueError(f"df ({len(df)}) короче y_pred ({n}) — выровняйте данные.")
+    
     users = df["users"].iloc[:n].values
-    ad_cost = cpc * users
-    pred_rev = y_pred * conv_rate * config.AVG_ORDER_VALUE
-    roi = np.where(ad_cost > 0, (pred_rev - ad_cost) / ad_cost * 100, np.nan)
+    mask_n = is_paid_mask[:n] if len(is_paid_mask) >= n else is_paid_mask
 
-    cap = np.nanpercentile(roi, 98)
-    mask = np.isfinite(roi) & (roi <= cap) & (roi >= -100)
+    ad_cost = np.where(mask_n, cpc * users, 0.0)
+    pred_rev = np.where(mask_n, y_pred * conv_rate * config.AVG_ORDER_VALUE, 0.0)
+
+    roi = np.where((mask_n) & (ad_cost > 0), (pred_rev - ad_cost) / ad_cost * 100, np.nan)
+
+    cap = np.nanpercentile(roi, 98) if np.any(np.isfinite(roi)) else 100
+    mask_plot = np.isfinite(roi) & (roi <= cap) & (roi >= -100)
+
+    if not np.any(mask_plot):
+        print("[plot] plot_roi_vs_traffic: нет платных строк для отображения.")
+        return
     
     fig, ax = plt.subplots(figsize=(10, 5))
-    sc = ax.scatter(y_pred[mask], roi[mask], alpha=0.3, s=5, c=roi[mask], cmap="RdYlGn", vmin=-50, vmax=cap)
+    sc = ax.scatter(y_pred[mask_plot], roi[mask_plot], alpha=0.3, s=5, c=roi[mask_plot], cmap="RdYlGn", vmin=-50, vmax=cap)
     plt.colorbar(sc, ax=ax, label="ROI (%)")
     ax.axhline(0, linestyle="--", color="black", linewidth=0.8)
-    ax.set_title("ROI по отношению спрогнозированного трафика")
-    ax.set_xlabel("Спрогнозированные просмотры страниц")
+    ax.set_title("ROI по отношению спрогнозированному трафику (только Paid)")
+    ax.set_xlabel("Спрогнозированные просмотры страниц (paid)")
     ax.set_ylabel("ROI (%)")
     plt.tight_layout()
     _save(fig, f"{title}.png", output_dir)
@@ -322,9 +344,13 @@ def plot_metrics_comparison(
     results_df: pd.DataFrame, 
     output_dir: str | Path = "outputs",
 ) -> None:
+    df_agg = (
+        results_df.groupby("Model")[["sMAPE (%)", "R²"]]
+        .mean()
+    )
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    sns.barplot(data=results_df, x="Model", y="sMAPE (%)", ax=axes[0], palette=COLORS, errorbar=None)
-    axes[0].set_title("Средняя ошибка прогноза (ниже = лучше)")
+    sns.barplot(data=df_agg, x="Model", y="sMAPE (%)", ax=axes[0], palette=COLORS, errorbar=None)
+    axes[0].set_title("Средняя ошибка прогноза (ниже = лучше)\n[среднее по всем CPC и фолдам]")
     axes[0].set_ylabel("Ошибка (%)")
 
     sns.barplot(data=results_df, x="Model", y="R²", ax=axes[1], palette=COLORS, errorbar=None)

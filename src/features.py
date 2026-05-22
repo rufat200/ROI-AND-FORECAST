@@ -12,8 +12,10 @@ FEATURE_COLS = [
     "hour_sin", "hour_cos", "dow_sin", "dow_cos",
     "month_sin", "month_cos",
     "hour_x_dow",
-    "users",
-    "users_log",
+    "is_holiday_season", # ноябрь-декабрь = 1
+    "days_since_jan1", # позиция в году, циклические провалы
+    # "users_log",
+    # "users",
     "page_views_per_user",
     # Рекламные
     "ad_cost", "cpc_value", "adstock_cost", "ad_cost_lag_1", "ad_cost_lag_24",
@@ -164,6 +166,7 @@ def build_feature_matrix(
     encoders: dict | None = None,
     seg_stats: dict | None = None,
     target_col: str = "page_views",
+    log_transform: bool = True,
 ) -> tuple[pd.DataFrame, pd.Series, dict, dict, np.ndarray]:
     """
     Возвращает (X, y, encoders, seg_stats, is_paid_mask).
@@ -184,8 +187,13 @@ def build_feature_matrix(
     df["dow_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
     df["month_sin"]  = np.sin(2 * np.pi * df["month"] / 12)
     df["month_cos"]  = np.cos(2 * np.pi * df["month"] / 12)
-
     df["hour_x_dow"] = df["hour"] * 7 + df["day_of_week"]
+
+    # праздничный сезон: ноябрь (11) и декабрь (12) основные пики трафика.
+    df["is_holiday_season"] = df["month"].isin([11, 12]).astype(int)
+
+    day_of_year = dt.dt.dayofyear
+    df["days_since_jan1"] = day_of_year / 365.0
 
     df["users_log"] = np.log1p(df["users"])
 
@@ -201,25 +209,25 @@ def build_feature_matrix(
     # ── 2. Рекламные признаки (БЕЗ утечки таргета) ───────────────────────────
     is_paid = df["medium"].str.lower().str.contains("cpc|paid|ppc", na=False)
     is_paid_mask = is_paid.values
- 
-    # ИСПРАВЛЕНИЕ: используем users (наблюдаемый), а не page_views (таргет)
+
     df["ad_cost"] = np.where(is_paid, cpc * df["users"], 0.0)
     df["cpc_value"] = cpc
     df["ad_cost_lag_1"] = df["ad_cost"].shift(1).fillna(0.0)
     df["ad_cost_lag_24"] = df["ad_cost"].shift(24).fillna(0.0)
  
     # ── 3. Почасовые лаги по агрегированному ряду ────────────────────────────
-    hourly = df.groupby("event_hour")["page_views"].sum().sort_index()
+
+    hourly_log = df.groupby("event_hour")["page_views"].sum().apply(np.log1p).sort_index()
  
     for lag in [1, 4, 8, 12, 24, 48, 168]:
-        shifted = hourly.shift(lag)
+        shifted = hourly_log.shift(lag)
         df[f"lag_{lag}"] = df["event_hour"].map(shifted)
  
-    hourly_roll_mean_24 = hourly.shift(1).rolling(24, min_periods=1).mean()
-    hourly_roll_mean_48 = hourly.shift(1).rolling(48, min_periods=1).mean()
-    hourly_roll_mean_168 = hourly.shift(1).rolling(168, min_periods=1).mean()
-    hourly_roll_std = hourly.shift(1).rolling(24, min_periods=1).std().fillna(0)
-    hourly_slope = _rolling_slope(hourly.shift(1).bfill(), window=24)
+    hourly_roll_mean_24 = hourly_log.shift(1).rolling(24, min_periods=1).mean()
+    hourly_roll_mean_48 = hourly_log.shift(1).rolling(48, min_periods=1).mean()
+    hourly_roll_mean_168 = hourly_log.shift(1).rolling(168, min_periods=1).mean()
+    hourly_roll_std = hourly_log.shift(1).rolling(24, min_periods=1).std().fillna(0)
+    hourly_slope = _rolling_slope(hourly_log.shift(1).bfill(), window=24)
  
     df["rolling_mean_24"] = df["event_hour"].map(hourly_roll_mean_24)
     df["rolling_mean_48"] = df["event_hour"].map(hourly_roll_mean_48)
@@ -281,10 +289,13 @@ def build_feature_matrix(
  
     # ── 7. Сборка X, y ────────────────────────────────────────────────────────
     X = df[FEATURE_COLS].copy()
-    y = df[target_col].fillna(0)
- 
-    # Финальная зачистка NaN/inf
     X = X.replace([np.inf, -np.inf], np.nan)
     X = X.fillna(X.median(numeric_only=True))
- 
+
+
+    if log_transform:
+        y = np.log1p(df[target_col].fillna(0))
+    else:
+        y = df[target_col].fillna(0)
+
     return X, y, encoders, seg_stats, is_paid_mask

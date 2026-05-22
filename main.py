@@ -18,10 +18,10 @@ from src.features import build_feature_matrix
 from src.data_split import get_walk_forward_indices
 from src.models import (
     get_models,
-    compute_traffic_metrics,
     compute_business_metrics,
+    compute_traffic_metrics_log,
 )
-from src.model_cache import save_model
+from src.model_cache import save_model, save_encoders
 from src.plots import (
     plot_distribution,
     plot_forecast_vs_actual,
@@ -36,7 +36,8 @@ from src.plots import (
     plot_naive_comparison,
     plot_economic_interpretation,
 )
- 
+
+
 warnings.filterwarnings("ignore")
 
 
@@ -80,7 +81,7 @@ def run_sensitivity_analysis(
 ) -> pd.DataFrame:
     
     all_results: list[dict] = []
-    folds = get_walk_forward_indices(df, n_splits=config.N_SPLITS)
+    folds = get_walk_forward_indices(df)
 
     for cpc in config.CPC_SEGMENTS:
         print(f"\n{'='*50}\n CPC = ${cpc}\n{'='*50}")
@@ -93,32 +94,50 @@ def run_sensitivity_analysis(
             fold_smapes: list[dict] = []
             naive_smapes: list[dict] = []
 
+
             for i, (train_fold, test_fold) in enumerate(folds):
                 start = p()
 
-                X_train, y_train, encoders, seg_stats, _ = build_feature_matrix(
-                    train_fold, cpc
-                )
-                X_test, y_test, _, _, is_paid_mask = build_feature_matrix(
-                    test_fold, cpc, encoders=encoders, seg_stats=seg_stats
-                )
+                X_train, y_train, encoders, seg_stats, _ = build_feature_matrix(train_fold, cpc)
+                X_test, y_test, _, _, is_paid_mask = build_feature_matrix(test_fold, cpc, encoders, seg_stats)
 
-                train_conv_rate = train_fold["conversions"].sum() / max(train_fold["users"].sum(), 1)
+                train_paid_mask = (
+                    train_fold["medium"]
+                    .str.lower()
+                    .str.contains("cpc|paid|ppc", na=False)
+                )
+                paid_train = train_fold[train_paid_mask]
+                if len(paid_train) > 0 and paid_train["users"].sum() > 0:
+                    train_conv_rate = (
+                        paid_train["conversions"].sum()
+                        / paid_train["users"].sum()
+                    )
+                else:
+                    train_conv_rate = (
+                        train_fold["conversions"].sum()
+                        / max(train_fold["users"].sum(), 1)
+                    )
+                    print(f"[warn] Fold {i+1}: нет платных строк в train, "
+                          f"используется общий conv_rate={train_conv_rate:.6f}")
+
 
                 y_naive = y_test.shift(1).bfill()
                 naive_smapes.append(
-                    compute_traffic_metrics(y_test, y_naive)["sMAPE (%)"]
+                    compute_traffic_metrics_log(y_test, y_naive)["sMAPE (%)"]
                 )
 
                 model = get_models()[name]
                 _fit_model(name, model, X_train, y_train, X_test, y_test)
                 save_model(model, f"{name}_fold-{i+1}", cpc)
+                save_encoders(encoders, seg_stats, name, i + 1, cpc)
 
-                preds = np.maximum(model.predict(X_test), 0)
+                preds_log = np.maximum(model.predict(X_test), 0)
+                preds = np.expm1(preds_log)
 
-                t_m = compute_traffic_metrics(y_test, preds)
+
+                t_m = compute_traffic_metrics_log(y_test, preds_log)
                 b_m = compute_business_metrics(
-                    y_true=y_test.values, 
+                    y_true=np.expm1(y_test.values), 
                     y_pred=preds,
                     conversions=test_fold["conversions"].values,
                     revenue=test_fold["revenue"].values,
@@ -130,21 +149,25 @@ def run_sensitivity_analysis(
                 all_t_metrics.append(t_m)
                 all_b_metrics.append(b_m)
                 fold_smapes.append(t_m["sMAPE (%)"])
-                m = compute_traffic_metrics(y_test, preds)
-                print(f"[{name}]\n[Fold] {i+1} sMAPE: {m['sMAPE (%)']}%")
-                print(f"[Fold] {i+1} R²={t_m['R²']:.4f}")
-                print(f"[Fold] {i+1} MAE={t_m['MAE']:.2f}")
+                print(f"[{name}]")
+                print(f"[Fold] {i+1} sMAPE = {t_m['sMAPE (%)']}%")
+                print(f"[Fold] {i+1} R²    = {t_m['R²']*100:.2f}%")
+                print(f"[Fold] {i+1} MAE   = {t_m['MAE']:.2f}")
+                print(f"[Fold] {i+1} MedAE = {t_m['MedAE']:.2f}")
+                print(f"[Fold] {i+1} MSE   = {t_m['MSE']:.2f}")
+                print(f"[Fold] {i+1} RMSE  = {t_m['RMSE']:.2f}")
 
                 is_last_fold = (i == len(folds) - 1)
 
                 if cpc == 0.30 and is_last_fold:
-                    plot_forecast_vs_actual(y_test, preds, title=f"{name}_fold_{i+1}_CPC_0.30")
+                    y_test_origin = np.expm1(y_test.values)
+                    plot_forecast_vs_actual(y_test_origin, preds, title=f"{name}_fold_{i+1}_CPC_0.30")
                     if name == "LightGBM":
                         plot_shap_importance(model, X_test)
                         plot_residuals(y_test, preds, title=f"residuals_{name}_fold_{i+1}_CPC_0.30")
                         plot_distribution(y_test, preds, title=f"distribution_{name}_fold_{i+1}_CPC_0.30")
                         plot_learning_curve(model, X_train, y_train, title=f"{name}_fold_{i+1}_CPC_0.30")
-                        plot_roi_vs_traffic(preds, test_fold, cpc, train_conv_rate, title=f"roi_vs_traffic_{name}_fold_{i+1}_CPC_0.30")
+                        plot_roi_vs_traffic(preds, test_fold, cpc, train_conv_rate, is_paid_mask, title=f"roi_vs_traffic_{name}_fold_{i+1}_CPC_0.30")
                 
                 print(f"[time] {p() - start: .2f}")
 
