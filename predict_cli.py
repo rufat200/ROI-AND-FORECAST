@@ -27,9 +27,9 @@ from src.model_cache import load_encoders
 # ── Константы отображения ─────────────────────────────────────────────────────
 W = 64
 
-def _line(char="─"):  print(char * W)
-def _header(text):    _line("═"); print(f"  {text}"); _line("═")
-def _section(text):   print(); _line(); print(f"  {text}"); _line()
+def _line(char="─"): print(char * W)
+def _header(text): _line("═"); print(f"  {text}"); _line("═")
+def _section(text): print(); _line(); print(f"  {text}"); _line()
 
 def _bar(value, max_val, width=30, char="█", empty="░"):
     filled = round(value / max_val * width) if max_val > 0 else 0
@@ -37,11 +37,11 @@ def _bar(value, max_val, width=30, char="█", empty="░"):
 
 def _color(text, code): return f"\033[{code}m{text}\033[0m"
 
-GREEN  = lambda t: _color(t, "32")
-RED    = lambda t: _color(t, "31")
+GREEN = lambda t: _color(t, "32")
+RED = lambda t: _color(t, "31")
 YELLOW = lambda t: _color(t, "33")
-CYAN   = lambda t: _color(t, "36")
-BOLD   = lambda t: _color(t, "1")
+CYAN = lambda t: _color(t, "36")
+BOLD = lambda t: _color(t, "1")
 
 
 # ── Справочники ───────────────────────────────────────────────────────────────
@@ -49,9 +49,9 @@ SOURCES = ["google", "(direct)", "<Other>", "shop.googlemerchandisestore.com", "
 MEDIUMS = ["organic", "(none)", "cpc", "referral", "<Other>", "(data deleted)"]
 DEVICES = ["desktop", "mobile", "tablet"]
 OS_LIST = ["Windows", "Web", "Android", "iOS", "Macintosh", "<Other>"]
-MODELS  = ["CatBoost", "LightGBM", "XGBoost", "RandomForest"]
-FOLDS   = [str(i) for i in range(1, config.N_SPLITS + 1)]
-CPCS    = list(config.CPC_SEGMENTS)
+MODELS = ["CatBoost", "LightGBM", "XGBoost", "RandomForest"]
+FOLDS = [str(i) for i in range(1, config.N_SPLITS + 1)]
+CPCS = list(config.CPC_SEGMENTS)
 
 
 # ── Вспомогательные функции ───────────────────────────────────────────────────
@@ -89,7 +89,6 @@ def load_model_weights(model_name: str, cpc: float, fold):
 
 
 def compute_conv_rate(history_df: pd.DataFrame) -> float:
-    """Conv rate только по платному трафику из датасета."""
     paid_mask = history_df["medium"].str.lower().str.contains("cpc|paid|ppc", na=False)
     paid = history_df[paid_mask]
     total_users = paid["users"].sum()
@@ -97,39 +96,20 @@ def compute_conv_rate(history_df: pd.DataFrame) -> float:
         return 0.015
     return float(paid["conversions"].sum() / total_users)
 
-
-# ── Ключевая функция: синтетическая история + окно прогноза ──────────────────
 def build_prediction_context(
     params: dict,
     history_df: pd.DataFrame,
     context_weeks: int = 2,
 ) -> tuple[pd.DataFrame, int, list[int], dict]:
-    """
-    Проблема: lag_1, lag_24, rolling_mean_24 и т.д. вычисляются через
-    groupby("event_hour"). Реальная история (2020-2021) и окно прогноза
-    (2026) имеют РАЗНЫЕ timestamp → лаги не пробрасываются → все нули.
-
-    Решение: строим СИНТЕТИЧЕСКУЮ историю с timestamp'ами прямо
-    перед датой прогноза, заполняя page_views и users из
-    исторического паттерна (средние по (day_of_week, hour) для сегмента).
-    Тогда lag_24 для 2026-05-25 00:00 смотрит на 2026-05-24 00:00,
-    где лежит историческое среднее — и лаги становятся информативными.
-
-    Возвращает:
-        combined_df         — синтетическая история + 24ч прогноз
-        n_pred              — кол-во строк прогноза (24)
-        hourly_est_users    — ожидаемые пользователи по часам (из паттерна)
-        pattern_stats       — словарь со статистикой для отображения
-    """
-    date_str  = params["date"]
+    date_str = params["date"]
     pred_date = pd.Timestamp(date_str, tz="UTC")
 
     # ── 1. Исторический паттерн сегмента ─────────────────────────────────────
     seg_mask = (
-        (history_df["source"]      == params["source"]) &
-        (history_df["medium"]      == params["medium"]) &
+        (history_df["source"] == params["source"]) &
+        (history_df["medium"] == params["medium"]) &
         (history_df["device_type"] == params["device"]) &
-        (history_df["os"]          == params["os"])
+        (history_df["os"] == params["os"])
     )
     seg_hist = history_df[seg_mask].copy()
 
@@ -149,16 +129,16 @@ def build_prediction_context(
         .agg(users_mean=("users", "mean"), pv_mean=("page_views", "mean"))
         .reset_index()
     )
-    global_u  = float(seg_hist["users"].mean())      or 1.0
+    global_u = float(seg_hist["users"].mean()) or 1.0
     global_pv = float(seg_hist["page_views"].mean()) or 1.0
 
     def _lookup(dow: int, hour: int) -> tuple[int, int]:
         row = pattern[(pattern["_dow"] == dow) & (pattern["_hour"] == hour)]
         if len(row):
-            u  = max(1, round(float(row["users_mean"].values[0])))
+            u = max(1, round(float(row["users_mean"].values[0])))
             pv = max(0, round(float(row["pv_mean"].values[0])))
         else:
-            u  = max(1, round(global_u))
+            u = max(1, round(global_u))
             pv = max(0, round(global_pv))
         return u, pv
 
@@ -207,9 +187,9 @@ def build_prediction_context(
 
     pattern_stats = {
         "total_est_users": sum(hourly_est_users),
-        "peak_hour":       int(np.argmax(hourly_est_users)),
-        "avg_pv_hist":     round(global_pv, 1),
-        "segment_rows":    len(seg_hist),
+        "peak_hour": int(np.argmax(hourly_est_users)),
+        "avg_pv_hist": round(global_pv, 1),
+        "segment_rows": len(seg_hist),
     }
 
     return combined, len(pred_df), hourly_est_users, pattern_stats
@@ -222,25 +202,25 @@ def calculate_business_metrics(
     params: dict,
     history_df: pd.DataFrame,
 ) -> dict:
-    cpc     = params["cpc"]
+    cpc = params["cpc"]
     is_paid = cpc > 0 and ("cpc" in params["medium"].lower() or "paid" in params["medium"].lower())
 
-    conv_rate       = compute_conv_rate(history_df)
+    conv_rate = compute_conv_rate(history_df)
     avg_order_value = config.AVG_ORDER_VALUE
-    churn           = config.MONTHLY_CHURN_RATE
-    gross_margin    = config.GROSS_MARGIN
+    churn = config.MONTHLY_CHURN_RATE
+    gross_margin = config.GROSS_MARGIN
 
     ad_spend = cpc * total_est_users if is_paid else 0.0
 
     # Конверсии и выручка — только от paid трафика
     pred_pv_paid = total_pv if is_paid else 0.0
-    pred_conv    = pred_pv_paid * conv_rate
+    pred_conv = pred_pv_paid * conv_rate
     pred_revenue = pred_conv * avg_order_value
 
-    roi  = ((pred_revenue - ad_spend) / ad_spend * 100) if ad_spend > 0 else None
-    roas = (pred_revenue / ad_spend)                    if ad_spend > 0 else None
-    cpa  = (ad_spend / pred_conv) if (pred_conv > 0 and is_paid)        else None
-    ltv  = avg_order_value * (1.0 / churn) * gross_margin
+    roi = ((pred_revenue - ad_spend) / ad_spend * 100) if ad_spend > 0 else None
+    roas = (pred_revenue / ad_spend) if ad_spend > 0 else None
+    cpa = (ad_spend / pred_conv) if (pred_conv > 0 and is_paid) else None
+    ltv = avg_order_value * (1.0 / churn) * gross_margin
 
     return dict(
         conv_rate=conv_rate, ad_spend=ad_spend, pred_conv=pred_conv,
@@ -292,11 +272,11 @@ def collect_inputs(args) -> dict:
 
     _section("4/5  Устройство и ОС")
     device = args.device if args.device else _ask("Тип устройства", options=DEVICES, default="desktop")
-    os     = args.os    if args.os     else _ask("Операционная система", options=OS_LIST, default="Windows")
+    os = args.os if args.os else _ask("Операционная система", options=OS_LIST, default="Windows")
 
     _section("5/5  Модель и фолд")
     model = args.model if args.model else _ask("Выберите модель", options=MODELS, default="CatBoost")
-    fold  = args.fold  if args.fold  else _ask("Выберите фолд",  options=FOLDS,  default="5")
+    fold = args.fold if args.fold else _ask("Выберите фолд", options=FOLDS, default="5")
 
     return dict(date=date_str, cpc=cpc, source=source, medium=medium,
                 device=device, os=os, model=model, fold=fold)
@@ -311,8 +291,8 @@ def print_results(
     biz: dict,
     model_name: str,
 ) -> None:
-    total_pv         = sum(hourly_preds)
-    total_est_users  = pattern_stats["total_est_users"]
+    total_pv = sum(hourly_preds)
+    total_est_users = pattern_stats["total_est_users"]
 
     _header(f"Прогноз на {params['date']} (Модель: {model_name})")
 
@@ -330,12 +310,12 @@ def print_results(
           f"  (conv_rate {biz['conv_rate']*100:.1f}%)")
     print()
 
-    max_pv   = max(hourly_preds)   or 1
-    max_u    = max(hourly_est_users) or 1
+    max_pv = max(hourly_preds)   or 1
+    max_u = max(hourly_est_users) or 1
     print(f"  {'Час':<6}  {'Прогноз page_views':<32}  {'pv':>5}  {'users':>6}")
     print(f"  {'───':<6}  {'──────────────────────────────────':<32}  {'──':>5}  {'─────':>6}")
     for h, (pv, u) in enumerate(zip(hourly_preds, hourly_est_users)):
-        bar  = _bar(pv, max_pv, width=32)
+        bar = _bar(pv, max_pv, width=32)
         peak = CYAN("◀") if pv == max_pv else " "
         print(f"  {h:02d}:00   {bar}  {pv:>5}  {u:>6} {peak}")
 
@@ -377,14 +357,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Прогноз трафика и оценка эффективности рекламы"
     )
-    parser.add_argument("--date",   default=None, help="Дата YYYY-MM-DD")
-    parser.add_argument("--cpc",    default=0.30, type=float)
-    parser.add_argument("--source", default="google",   choices=SOURCES)
-    parser.add_argument("--medium", default="organic",  choices=MEDIUMS)
-    parser.add_argument("--device", default="desktop",  choices=DEVICES)
-    parser.add_argument("--os",     default="Windows",  choices=OS_LIST)
-    parser.add_argument("--model",  default="CatBoost", choices=MODELS)
-    parser.add_argument("--fold",   default="5")
+    parser.add_argument("--date", default=None, help="Дата YYYY-MM-DD")
+    parser.add_argument("--cpc", default=0.30, type=float)
+    parser.add_argument("--source", default="google", choices=SOURCES)
+    parser.add_argument("--medium", default="organic", choices=MEDIUMS)
+    parser.add_argument("--device", default="desktop", choices=DEVICES)
+    parser.add_argument("--os", default="Windows", choices=OS_LIST)
+    parser.add_argument("--model", default="CatBoost", choices=MODELS)
+    parser.add_argument("--fold", default="5")
     parser.add_argument("--non-interactive", action="store_true")
     args = parser.parse_args()
 
@@ -424,7 +404,7 @@ def main():
         )
         X_pred = X.iloc[-n_pred:].reset_index(drop=True)
 
-        preds_log    = np.maximum(model_obj.predict(X_pred), 0)
+        preds_log = np.maximum(model_obj.predict(X_pred), 0)
         hourly_preds = [max(0, round(float(np.expm1(p)))) for p in preds_log]
 
     except Exception as e:
