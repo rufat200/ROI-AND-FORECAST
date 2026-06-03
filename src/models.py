@@ -26,10 +26,10 @@ def get_models() -> dict:
         cat_p["task_type"] = "GPU"
         cat_p["devices"] = "0"
     return {
-        "XGBoost": XGBRegressor(**xgb_p),
-        "CatBoost": CatBoostRegressor(**cat_p),
+        # "XGBoost": XGBRegressor(**xgb_p),
+        # "CatBoost": CatBoostRegressor(**cat_p),
         "LightGBM": LGBMRegressor(**lgb_p),
-        "RandomForest": RandomForestRegressor(**config.RF_PARAMS),
+        # "RandomForest": RandomForestRegressor(**config.RF_PARAMS),
     }
 
 
@@ -46,8 +46,6 @@ def compute_traffic_metrics(
     MSE   : Mean Squared Error
     RMSE  : Root Mean Squared Error
     MedAE : Median Absolute Error
-    Bias  : Mean signed error  (pred – true) # Среднее смещение
-    MASE  : Mean Absolute Scaled Error  (naive baseline = lag-1)
     """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)

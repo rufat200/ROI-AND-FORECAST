@@ -166,7 +166,11 @@ def run_sensitivity_analysis(
                         plot_shap_importance(model, X_test)
                         plot_residuals(y_test, preds, title=f"residuals_{name}_fold_{i+1}_CPC_0.30")
                         plot_distribution(y_test, preds, title=f"distribution_{name}_fold_{i+1}_CPC_0.30")
-                        plot_learning_curve(model, X_train, y_train, title=f"{name}_fold_{i+1}_CPC_0.30")
+                        plot_learning_curve(model_fn=lambda: get_models()["LightGBM"], 
+                                            X_train=X_train, y_train=y_train, 
+                                            X_val=X_test,
+                                            y_val=y_test,
+                                            title=f"{name}_fold_{i+1}_CPC_0.30")
                         plot_roi_vs_traffic(preds, test_fold, cpc, train_conv_rate, is_paid_mask, title=f"roi_vs_traffic_{name}_fold_{i+1}_CPC_0.30")
                 
                 print(f"[time] {p() - start: .2f}")

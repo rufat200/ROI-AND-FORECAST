@@ -2,13 +2,21 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).parent # папка project/
-DATA_PATH = Path(r"C:\Users\Rufat\Downloads\Telegram Desktop\bquxjob_3d66e4cb_19dc5bab84e.csv")
+DATA_PATH = Path(r"E:\DATASETS\BigQuery\bquxjob_3d66e4cb_19dc5bab84e.csv")
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── CPC-сетка для анализа чувствительности ───────────────────────────────────
-CPC_SEGMENTS = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+CPC_SEGMENTS = [
+    # 0.10, 
+    # 0.20, 
+    0.30, 
+    # 0.40, 
+    # 0.50, 
+    # 0.60, 
+    # 0.70,
+]
 
 # ── Целевая переменная ────────────────────────────────────────────────────────
 TARGET_COL = "page_views"
@@ -27,13 +35,13 @@ GROSS_MARGIN = 0.40              # 40 % margin on revenue
 CTR_DEFAULT = 0.03               # 3 % click-through rate (impressions → clicks)
 
 
-USE_GPU = False
+USE_GPU = True
 
 
 LGBM_PARAMS = dict(
-    n_estimators=150,
-    learning_rate=0.09,
-    num_leaves=30,
+    n_estimators=2000,
+    learning_rate=0.03,
+    num_leaves=100,
     max_depth=-1,
     min_child_samples=20,
     subsample=0.8,
@@ -45,9 +53,9 @@ LGBM_PARAMS = dict(
 
 
 XGB_PARAMS = dict(
-    n_estimators=150,
-    learning_rate=0.09,
-    max_depth=3,
+    n_estimators=2000,
+    learning_rate=0.03,
+    max_depth=10,
     subsample=0.8,
     colsample_bytree=0.8,
     random_state=42,
@@ -57,17 +65,17 @@ XGB_PARAMS = dict(
 )
 
 CATBOOST_PARAMS = dict(
-    iterations=150,
-    learning_rate=0.09,
-    depth=3,
+    iterations=2000,
+    learning_rate=0.03,
+    depth=10,
     random_seed=42,
     verbose=0,
 )
 
 
 RF_PARAMS = dict(
-    n_estimators=150,
-    max_depth=3,
+    n_estimators=2000,
+    max_depth=10,
     min_samples_split=5,
     random_state=42,
     n_jobs=-1,

@@ -188,33 +188,48 @@ def plot_shap_importance(
 # LEARNING CURVE 6
 # ─────────────────────────────────────────────────────────────────────────────
 def plot_learning_curve(
-    model, 
-    X: pd.DataFrame, 
-    y: pd.DataFrame, 
-    title: str = "Learning Curve", 
+    model_fn,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    title: str = "Learning Curve",
     output_dir: str | Path = "outputs",
+    n_points: int = 6,
 ) -> None:
-    sizes, train_sc, val_sc = learning_curve(
-        model, X, y, cv=3,
-        scoring="neg_mean_absolute_error",
-        train_sizes=np.linspace(0.1, 1.0, 6),
-        n_jobs=-1,
-    )
-    train_mae = -train_sc.mean(axis=1)
-    val_mae = -val_sc.mean(axis=1)
-    train_std = train_sc.std(axis=1)
-    val_std = val_sc.std(axis=1)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(sizes, val_mae, "o-", color="#FF9800", linewidth=2, label="Validation MAE")
-    ax.plot(sizes, train_mae, "o-", color="#2196F3", linewidth=2, label="Train MAE")
-    ax.fill_between(sizes, val_mae - val_std, val_mae + val_std, alpha=0.15, color="#FF9800")
-    ax.fill_between(sizes, train_mae - train_std, train_mae + train_std, alpha=0.15, color="#2196F3")
-
-    gap = val_mae - train_mae
+    import lightgbm as lgb
+    from sklearn.metrics import mean_absolute_error
+    sizes = np.linspace(0.1, 1.0, n_points)
+    train_maes: list[float] = []
+    val_maes: list[float] = []
+    for frac in sizes:
+        n = max(int(len(X_train) * frac), 50)
+        X_tr = X_train.iloc[:n]
+        y_tr = y_train.iloc[:n]
+        m = model_fn()
+        m.fit(
+            X_tr, y_tr,
+            eval_set=[(X_val, y_val)],
+            callbacks=[
+                lgb.early_stopping(50, verbose=False),
+                lgb.log_evaluation(-1),
+            ],
+        )
+        train_maes.append(mean_absolute_error(y_tr, np.maximum(m.predict(X_tr), 0)))
+        val_maes.append(mean_absolute_error(y_val, np.maximum(m.predict(X_val), 0)))
+    train_maes = np.array(train_maes)
+    val_maes = np.array(val_maes)
+    actual_sizes = (sizes * len(X_train)).astype(int)
+    gap = val_maes - train_maes
     worst_idx = int(np.argmax(gap))
-    ax.axvline(sizes[worst_idx], linestyle=":", color="red", alpha=0.7, label=f"Max gap @ {sizes[worst_idx]:,.0f} rows")
-    ax.set_title(f"Learning Curve — LightGBM\n(Val ↓ и Train ↑ → сходятся = хорошо)")
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(actual_sizes, val_maes,   "o-", color="#FF9800", linewidth=2, label="Validation MAE")
+    ax.plot(actual_sizes, train_maes, "o-", color="#2196F3", linewidth=2, label="Train MAE")
+    ax.axvline(
+        actual_sizes[worst_idx], linestyle=":", color="red", alpha=0.7,
+        label=f"Max gap @ {actual_sizes[worst_idx]:,} rows"
+    )
+    ax.set_title("Learning Curve — LightGBM\n(Val ↓ и Train ↑ → сходятся = хорошо)")
     ax.set_xlabel("Размер Train")
     ax.set_ylabel("MAE")
     ax.legend()
@@ -351,7 +366,7 @@ def plot_metrics_comparison(
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     sns.barplot(data=df_agg, x="Model", y="sMAPE (%)", ax=axes[0], palette=COLORS, errorbar=None)
     axes[0].set_title("Средняя ошибка прогноза (ниже = лучше)\n[среднее по всем CPC и фолдам]")
-    axes[0].set_ylabel("Ошибка (%)")
+    axes[0].set_ylabel("sMAPE (%)")
 
     sns.barplot(data=results_df, x="Model", y="R²", ax=axes[1], palette=COLORS, errorbar=None)
     axes[1].set_title("Коэффициент детерминации (выше = лучше)")

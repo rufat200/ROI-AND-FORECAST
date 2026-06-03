@@ -316,7 +316,7 @@ def print_results(
     print(f"  {'───':<6}  {'──────────────────────────────────':<32}  {'──':>5}  {'─────':>6}")
     for h, (pv, u) in enumerate(zip(hourly_preds, hourly_est_users)):
         bar = _bar(pv, max_pv, width=32)
-        peak = CYAN("◀") if pv == max_pv else " "
+        peak = CYAN("◀ пик") if pv == max_pv else " "
         print(f"  {h:02d}:00   {bar}  {pv:>5}  {u:>6} {peak}")
 
     _section("Бизнес-показатели")
