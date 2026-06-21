@@ -7,8 +7,7 @@ from time import perf_counter as p
  
 import numpy as np
 import pandas as pd
- 
-# Добавляем корень проекта в sys.path, чтобы импорты src.* работали
+
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, "src")
  

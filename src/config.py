@@ -2,28 +2,27 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).parent # папка project/
-DATA_PATH = Path(r"E:\DATASETS\BigQuery\bquxjob_3d66e4cb_19dc5bab84e.csv")
-OUTPUT_DIR = BASE_DIR / "outputs"
+PROJECT_ROOT = BASE_DIR.parent
+DATA_PATH = PROJECT_ROOT / "data" / "bquxjob_3d66e4cb_19dc5bab84e.csv"
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── CPC-сетка для анализа чувствительности ───────────────────────────────────
 CPC_SEGMENTS = [
-    # 0.10, 
-    # 0.20, 
+    0.10, 
+    0.20, 
     0.30, 
-    # 0.40, 
-    # 0.50, 
-    # 0.60, 
-    # 0.70,
+    0.40, 
+    0.50, 
+    0.60, 
+    0.70,
 ]
 
-# ── Целевая переменная ────────────────────────────────────────────────────────
 TARGET_COL = "page_views"
 
-# ── Разбивка данных ───────────────────────────────────────────────────────────
-TEST_SIZE_RATIO = 0.20           # 20 % данных идут на тест
-MIN_TRAIN_ROWS  = 50             # нужно если в датасете (в фолде) СЛИШКОМ мало данных
+TEST_SIZE_RATIO = 0.20 #20% тест
+MIN_TRAIN_ROWS  = 50 
 N_SPLITS = 5                     # количество фолдов
 
 

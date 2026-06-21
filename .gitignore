@@ -13,8 +13,3 @@ outputs/
 outputs1/
 catboost_info/
 model_weights/
-demo_predict.py
-TEST_RESULTS/
-ghjh.txt
-prfds.py
-

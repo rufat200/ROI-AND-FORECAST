@@ -8,9 +8,7 @@ N_SPLITS = config.N_SPLITS
 MIN_TRAIN_ROWS = config.MIN_TRAIN_ROWS
 
 def split_data_ts(
-    df: pd.DataFrame, 
-    ts_col: str="event_hour", 
-    test_ratio: float = TEST_SIZE_RATIO,
+    df: pd.DataFrame, ts_col: str="event_hour", test_ratio: float = TEST_SIZE_RATIO,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = df.sort_values(ts_col).reset_index(drop=True)
     n = len(df)
@@ -28,7 +26,6 @@ def get_walk_forward_indices(
 ) -> list[tuple[pd.DataFrame, pd.DataFrame]]:
     df = df.sort_values("event_hour").reset_index(drop=True)
     n = len(df)
-
     test_size = n // (n_splits + 1)
     train_base = n - n_splits * test_size
 
@@ -41,11 +38,9 @@ def get_walk_forward_indices(
 
         train = df.iloc[:train_end].copy()
         test = df.iloc[train_end:test_end].copy()
-
         if len(train) < MIN_TRAIN_ROWS:
             print(f"[wf] Фолд {i + 1} пропущен: train={len(train)} < {MIN_TRAIN_ROWS}")
             continue
-
         print(
             f"[wf] Fold {i+1}/{n_splits}\n"
             f"  train: rows={len(train):,} "
